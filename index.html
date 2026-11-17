@@ -1,0 +1,650 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Сканворд - Мультиплеер</title>
+    <style>
+        :root { 
+            --primary: #007bff; 
+            --success: #28a745; 
+            --danger: #dc3545; 
+            --warning: #ffc107;
+            --clue-bg: #b3d4e6; 
+            --cell-size: 45px; 
+        }
+        
+        @media (max-width: 600px) { :root { --cell-size: 35px; } }
+
+        body { font-family: sans-serif; background: #f0f2f5; margin: 0; padding: 20px; display: flex; flex-direction: column; align-items: center; overflow-x: hidden; }
+        .screen { display: none; width: 100%; max-width: 1200px; }
+        .card { background: white; padding: 20px; border-radius: 12px; box-shadow: 0 8px 24px rgba(0,0,0,0.1); text-align: center; margin-bottom: 20px; }
+        
+        input[type="text"], input[type="number"], select { padding: 10px; margin: 5px 0; border: 2px solid #ddd; border-radius: 8px; font-size: 16px; box-sizing: border-box; }
+        button { padding: 10px 15px; border: none; border-radius: 8px; cursor: pointer; font-size: 16px; font-weight: bold; transition: 0.2s; color: white; background: var(--primary); }
+        button:active { transform: scale(0.95); }
+
+        #toast-container { position: fixed; bottom: 20px; right: 20px; z-index: 10000; display: flex; flex-direction: column; gap: 10px; }
+        .toast { padding: 15px 25px; border-radius: 8px; color: white; font-weight: bold; box-shadow: 0 4px 12px rgba(0,0,0,0.15); animation: slideIn 0.3s forwards, fadeOut 0.5s 3s forwards; }
+        .toast.success { background: var(--success); }
+        .toast.error { background: var(--danger); }
+        @keyframes slideIn { from { transform: translateX(100%); } to { transform: translateX(0); } }
+        @keyframes fadeOut { from { opacity: 1; } to { opacity: 0; visibility: hidden; } }
+
+        .game-layout { display: flex; gap: 20px; width: 100%; align-items: flex-start; }
+        .game-area { flex: 1; display: flex; flex-direction: column; align-items: center; min-width: 0; }
+        
+        @media (max-width: 900px) {
+            .game-layout { flex-direction: column; }
+            .chat-panel { width: 100% !important; height: 300px !important; }
+        }
+
+        .crossword-scroll-container { width: 100%; overflow: auto; display: flex; justify-content: center; margin-bottom: 20px; padding-bottom: 10px; }
+        .crossword-wrapper { display: grid; background: #333; border: 2px solid #333; width: max-content; transition: 0.2s; }
+        
+        .cell { width: var(--cell-size); height: var(--cell-size); background: #fff; border: 1px solid #333; box-sizing: border-box; position: relative; display: flex; justify-content: center; align-items: center; }
+        .cell.empty { background: #333; }
+        .cell input { width: 100%; height: 100%; border: none; text-align: center; font-size: calc(var(--cell-size) * 0.55); font-weight: bold; text-transform: uppercase; padding: 0; outline: none; cursor: pointer; }
+        
+        .cell.clue-cell { background-color: var(--clue-bg); padding: 2px; padding-bottom: 15%; cursor: context-menu; }
+        .cell.clue-cell input { font-size: calc(var(--cell-size) * 0.2); font-weight: 600; line-height: 1.1; text-transform: none; pointer-events: none; }
+        .cell .arrow { position: absolute; bottom: 2px; right: 2px; font-size: calc(var(--cell-size) * 0.35); font-weight: bold; pointer-events: none; }
+
+        .cell.highlighted { background-color: #fff3cd !important; }
+        .cell.active { box-shadow: inset 0 0 0 3px var(--primary); z-index: 2; }
+        .cell.correct { background: #d4edda; }
+        .cell.correct input { color: var(--success); }
+        .cell.incorrect { background: #f8d7da; }
+        .cell.incorrect input { color: var(--danger); }
+
+        .chat-panel { width: 300px; flex-shrink: 0; display: flex; flex-direction: column; height: 500px; background: white; border-radius: 12px; box-shadow: 0 8px 24px rgba(0,0,0,0.1); overflow: hidden; }
+        .chat-header { background: #f8f9fa; padding: 10px 15px; font-weight: bold; border-bottom: 1px solid #ddd; font-size: 14px; }
+        .chat-messages { flex: 1; padding: 15px; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; background: #fff; }
+        .chat-msg { background: #e9ecef; padding: 8px 12px; border-radius: 8px; font-size: 14px; word-wrap: break-word; max-width: 90%; }
+        .chat-msg.my-msg { background: #d1ecf1; align-self: flex-end; }
+        .chat-msg .sender { font-size: 11px; color: #007bff; font-weight: bold; display: block; margin-bottom: 2px; }
+        .chat-input-area { display: flex; padding: 10px; border-top: 1px solid #ddd; background: #f8f9fa; gap: 5px; }
+        .chat-input-area input { flex: 1; margin: 0; padding: 8px; border-radius: 20px; border: 1px solid #ccc; }
+        .chat-input-area button { padding: 8px 15px; border-radius: 20px; }
+
+        .progress-container { width: 100%; background-color: #e9ecef; border-radius: 8px; margin-bottom: 15px; height: 20px; position: relative; overflow: hidden; }
+        .progress-bar { height: 100%; background-color: var(--success); width: 0%; transition: width 0.3s; }
+        .progress-text { position: absolute; top: 0; left: 0; width: 100%; height: 100%; display: flex; justify-content: center; align-items: center; font-size: 12px; font-weight: bold; color: #000; }
+
+        .game-controls { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; flex-wrap: wrap; gap: 10px;}
+        .zoom-controls button { padding: 5px 10px; font-size: 18px; border-radius: 8px; background: #6c757d; }
+        
+        #emoji-bar { display: flex; gap: 5px; justify-content: center; margin-top: 10px; }
+        #emoji-bar button { background: #e9ecef; color: #333; font-size: 24px; padding: 5px 10px; border-radius: 50%; }
+        .floating-emoji { position: fixed; bottom: -50px; font-size: 40px; z-index: 9999; pointer-events: none; animation: floatUp 2s ease-out forwards; }
+        @keyframes floatUp { 0% { bottom: 20px; opacity: 1; transform: scale(1) translateX(0); } 100% { bottom: 100vh; opacity: 0; transform: scale(1.5) translateX(20px); } }
+
+        .modal-overlay { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0, 0, 0, 0.6); justify-content: center; align-items: center; z-index: 10000; backdrop-filter: blur(3px); }
+        .modal-content { background: white; padding: 20px; border-radius: 16px; text-align: center; max-width: 90%; width: max-content; max-height: 90vh; overflow-y: auto; }
+
+        .editor-toolbar { display: flex; gap: 5px; justify-content: center; margin-bottom: 15px; flex-wrap: wrap; }
+        .editor-toolbar button { background: #6c757d; flex: 1; }
+        .editor-toolbar button.active { background: var(--primary); box-shadow: 0 0 0 2px #0056b3; }
+        
+        #cell-context-menu { display: none; position: absolute; background: white; border: 1px solid #ccc; padding: 15px; border-radius: 8px; box-shadow: 0 4px 15px rgba(0,0,0,0.3); z-index: 10001; flex-direction: column; gap: 10px; width: 260px; }
+        #cell-context-menu input, #cell-context-menu select { width: 100%; padding: 8px; font-size: 14px; }
+        #cell-context-menu .btn-group { display: flex; gap: 5px; margin-top: 5px; }
+        #cell-context-menu button { flex: 1; padding: 8px; font-size: 14px; }
+
+        #path-banner { display: none; position: fixed; top: 10px; left: 50%; transform: translateX(-50%); background: var(--warning); color: #333; padding: 10px 20px; border-radius: 8px; font-weight: bold; z-index: 10005; text-align: center; }
+        .selecting-mode .cell { cursor: crosshair !important; }
+        .selecting-mode .cell input { pointer-events: none; }
+        
+        .crossword-list { display: flex; flex-direction: column; gap: 10px; margin-top: 15px; text-align: left; }
+        .crossword-item { display: flex; justify-content: space-between; align-items: center; background: #f8f9fa; padding: 10px 15px; border-radius: 8px; border: 1px solid #ddd; }
+    </style>
+</head>
+<body>
+
+    <div id="toast-container"></div>
+    <div id="path-banner">
+        Выбирайте клетки. <b>Enter</b> - Готово 
+        <button onclick="finishPathSelection()" style="background:#333; color:white; padding:3px 10px; font-size:12px;">ОК</button>
+    </div>
+
+    <!-- ЭКРАН 1: ГЛАВНОЕ МЕНЮ -->
+    <div id="screen-home" class="screen" style="display: block; max-width: 600px; margin: 0 auto;">
+        <div class="card">
+            <h2>Сканворд на двоих</h2>
+            <div style="margin: 15px 0;">
+                <input type="text" id="player-name" placeholder="Введите ваше имя" style="width: 100%; max-width: 300px; text-align: center; font-weight: bold;">
+            </div>
+            <div style="display: flex; gap: 10px; margin-bottom: 20px;">
+                <button id="btn-create-custom" style="flex: 1; background: #6f42c1;">Конструктор</button>
+                <button style="flex: 1; background: var(--success);" onclick="document.getElementById('join-section').style.display='block'">Войти по коду</button>
+            </div>
+            <div id="join-section" style="display: none; margin-bottom: 20px;">
+                <input type="text" id="input-code" placeholder="Код комнаты" maxlength="4" style="width: 60%; text-transform: uppercase;">
+                <button onclick="joinRoom()" style="width: 35%;">Войти</button>
+            </div>
+            <h3>Библиотека сканвордов</h3>
+            <div class="crossword-list" id="crossword-list-container">
+                <p style="text-align: center; color: #666;">Загрузка...</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- ЭКРАН 2: КОНСТРУКТОР -->
+    <div id="screen-constructor" class="screen">
+        <div class="card">
+            <h3 style="margin-top: 0;">Редактор сканворда</h3>
+            <div style="display: flex; gap: 10px; justify-content: center; margin-bottom: 15px;">
+                <input type="text" id="cw-name" placeholder="Название" style="width: 40%;">
+                <input type="number" id="cw-width" placeholder="Ширина" value="10" style="width: 15%;">
+                <input type="number" id="cw-height" placeholder="Высота" value="10" style="width: 15%;">
+                <button onclick="initEditor()">Создать</button>
+            </div>
+            
+            <div class="editor-toolbar" id="editor-toolbar" style="display: none;">
+                <button data-mode="letter" class="active" onclick="setEditorMode('letter')">✏️ Буквы</button>
+                <button data-mode="question" onclick="setEditorMode('question')">❓ Вопросы</button>
+                <button data-mode="delete" onclick="setEditorMode('delete')">🗑️ Удалить</button>
+            </div>
+            <p id="editor-hint" style="font-size: 13px; color: #555; background: #fff3cd; padding: 10px; border-radius: 8px; display: none;">
+                <b>Режим "Буквы":</b> кликайте и пишите (Enter или Стрелка вниз переключает на ввод в столбик). <br>
+                <b>Режим "Вопросы":</b> кликните по клетке, чтобы задать вопрос. <br>
+                <b>Режим "Удалить":</b> кликните, чтобы очистить клетку.
+            </p>
+
+            <div class="crossword-scroll-container" id="editor-container-wrapper" style="display: none;">
+                <div id="editor-container" class="crossword-wrapper"></div>
+            </div>
+            <button id="btn-save-cw" onclick="saveCrossword()" style="display: none; background: var(--success); margin-top: 15px; width: 100%;">Сохранить в библиотеку</button>
+            <button onclick="closeConstructor()" style="background: #6c757d; margin-top: 10px; width: 100%;">Отмена</button>
+        </div>
+    </div>
+
+    <!-- ЭКРАН 3: ИГРА -->
+    <div id="screen-game" class="screen">
+        <div class="game-layout">
+            <div class="game-area">
+                <div class="card" style="padding: 15px; width: 100%; box-sizing: border-box;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
+                        <h3 style="margin: 0;">Комната: <span id="room-code"></span></h3>
+                        <button onclick="leaveGame()" style="background: var(--danger); padding: 5px 15px; font-size: 14px; width: auto;">Выйти</button>
+                    </div>
+                    
+                    <div class="progress-container">
+                        <div class="progress-bar" id="progress-bar"></div>
+                        <div class="progress-text" id="progress-text">0 / 0</div>
+                    </div>
+                    
+                    <div class="game-controls">
+                        <div style="font-size: 14px; color: #666;">Ссылка: <input type="text" id="share-link" readonly onclick="this.select()" style="width: 120px; font-size: 12px;"></div>
+                        <div class="zoom-controls">
+                            <button onclick="zoomGrid(-5)">-</button>
+                            <button onclick="zoomGrid(5)">+</button>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="crossword-scroll-container">
+                    <div id="crossword-container" class="crossword-wrapper"></div>
+                </div>
+                
+                <div class="card" style="padding: 10px; width: 100%; box-sizing: border-box;">
+                    <div id="emoji-bar">
+                        <button onclick="sendEmoji('👍')">👍</button>
+                        <button onclick="sendEmoji('🔥')">🔥</button>
+                        <button onclick="sendEmoji('🤔')">🤔</button>
+                        <button onclick="sendEmoji('😂')">😂</button>
+                        <button onclick="sendEmoji('❤️')">❤️</button>
+                    </div>
+                </div>
+            </div>
+
+            <div class="chat-panel">
+                <div class="chat-header">Игроки: <span id="players-list">...</span></div>
+                <div class="chat-messages" id="chat-messages"></div>
+                <div class="chat-input-area">
+                    <input type="text" id="chat-input" placeholder="Сообщение..." onkeypress="if(event.key === 'Enter') sendChat()">
+                    <button onclick="sendChat()">➤</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ОКНО ПОБЕДЫ -->
+    <div id="win-modal" class="modal-overlay">
+        <div class="modal-content">
+            <h2>🎉 Ура! 🎉</h2>
+            <p>Вы молодцы, сканворд успешно пройден!</p>
+            <button onclick="window.location.reload()" style="background: var(--primary); width: 100%;">В главное меню</button>
+        </div>
+    </div>
+
+    <!-- МЕНЮ РЕДАКТОРА -->
+    <div id="cell-context-menu">
+        <input type="text" id="ctx-clue-text" placeholder="Текст вопроса">
+        <div class="row" style="display:flex; gap:5px;">
+            <select id="ctx-arrow" style="flex:2;">
+                <option value="→">Вправо →</option>
+                <option value="↓">Вниз ↓</option>
+                <option value="←">Влево ←</option>
+                <option value="↑">Вверх ↑</option>
+                <option value="↘">Вправо-Вниз ↘</option>
+                <option value="↙">Влево-Вниз ↙</option>
+                <option value="↖">Влево-Вверх ↖</option>
+                <option value="↗">Вправо-Вверх ↗</option>
+            </select>
+            <input type="number" id="ctx-length" placeholder="Длина" min="1" max="20" value="5" style="flex:1;">
+        </div>
+        <button id="btn-manual-path" onclick="startPathSelection()" style="display: none; background: var(--warning); color: #333;">Указать клетки</button>
+        <div class="btn-group">
+            <button onclick="applyContextClue()" style="background: var(--primary);">ОК</button>
+            <button onclick="clearContextCell()" style="background: var(--danger);">Удалить</button>
+        </div>
+        <div class="btn-group"><button onclick="closeContextMenu()" style="background: #6c757d;">Отмена</button></div>
+    </div>
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script>
+        const socket = io();
+        let currentRoomCode = "", crosswordData = null, localWordsState = {}, gameWon = false;
+        let currentPlayerName = "";
+        let currentCellSize = parseInt(getComputedStyle(document.documentElement).getPropertyValue('--cell-size')) || 45;
+        
+        let currentWord = null; 
+        let currentDirection = 'across'; 
+
+        let editorGrid = []; 
+        let editorW, editorH; 
+        let currentCtxCell = null; 
+        let editorMode = 'letter'; 
+        let isSelectingPath = false; 
+        let pathCells = []; 
+        let pendingClue = null;
+        let editorDirection = 'right'; 
+
+        function showToast(text, type = 'success') {
+            const container = document.getElementById('toast-container');
+            const toast = document.createElement('div');
+            toast.className = `toast ${type}`;
+            toast.textContent = text;
+            container.appendChild(toast);
+            setTimeout(() => toast.remove(), 3500);
+        }
+
+        socket.on('toastMsg', (data) => showToast(data.text, data.type));
+        socket.on('crosswordSaved', (msg) => { showToast(msg, 'success'); closeConstructor(); });
+        socket.on('infoMsg', (msg) => showToast(msg, 'success'));
+        socket.on('errorMsg', (msg) => showToast(msg, 'error'));
+
+        socket.on('connect', () => {
+            const urlParams = new URLSearchParams(window.location.search);
+            const roomFromUrl = urlParams.get('room');
+            if (roomFromUrl && roomFromUrl.length === 4) {
+                document.getElementById('input-code').value = roomFromUrl.toUpperCase();
+                document.getElementById('join-section').style.display = 'block';
+                showToast("Введите имя, чтобы войти в комнату по ссылке", "success");
+            }
+        });
+
+        function getPlayerName() {
+            const name = document.getElementById('player-name').value.trim();
+            if (!name) { showToast("Пожалуйста, введите ваше имя!", "error"); return null; }
+            return name;
+        }
+
+        socket.on('crosswordList', (list) => {
+            const container = document.getElementById('crossword-list-container');
+            if (list.length === 0) {
+                container.innerHTML = '<p style="text-align: center; color: #666;">Пока нет сканвордов.</p>';
+                return;
+            }
+            container.innerHTML = '';
+            list.forEach(cw => {
+                const item = document.createElement('div');
+                item.className = 'crossword-item';
+                item.innerHTML = `
+                    <div><b>${cw.name}</b> <span style="color: #888; font-size: 12px;">(Слов: ${cw.words.length})</span></div>
+                    <div style="display: flex; gap: 5px;">
+                        <button onclick="playCustom('${cw.id}')" style="background: var(--success); padding: 5px 10px; font-size: 14px;">Играть</button>
+                        <button onclick="deleteCustom('${cw.id}')" style="background: var(--danger); padding: 5px 10px; font-size: 14px;">Удалить</button>
+                    </div>`;
+                container.appendChild(item);
+            });
+        });
+
+        socket.on('playersUpdated', (players) => { 
+            document.getElementById('players-list').textContent = players.map(p => p.name).join(', '); 
+        });
+
+        socket.on('receiveChatMessage', (msg) => { addChatMessage(msg, false); });
+
+        function addChatMessage(msg, isMe) {
+            const container = document.getElementById('chat-messages');
+            const msgEl = document.createElement('div');
+            msgEl.className = 'chat-msg' + (isMe ? ' my-msg' : '');
+            msgEl.innerHTML = `<span class="sender">${msg.sender}</span>${msg.text}`;
+            container.appendChild(msgEl);
+            container.scrollTop = container.scrollHeight;
+        }
+
+        window.sendChat = function() {
+            const input = document.getElementById('chat-input');
+            const text = input.value.trim();
+            if (text && currentRoomCode) {
+                const msg = { roomCode: currentRoomCode, sender: currentPlayerName, text: text };
+                socket.emit('sendChatMessage', msg);
+                addChatMessage(msg, true);
+                input.value = '';
+            }
+        };
+
+        window.leaveGame = function() {
+            if (confirm("Выйти из игры?")) {
+                socket.emit('leaveRoom', currentRoomCode);
+                window.history.pushState({}, document.title, window.location.pathname);
+                window.location.reload();
+            }
+        };
+
+        function sendEmoji(emoji) { socket.emit('sendEmoji', { roomCode: currentRoomCode, emoji: emoji }); }
+        
+        socket.on('receiveEmoji', (data) => {
+            const el = document.createElement('div');
+            el.className = 'floating-emoji'; el.textContent = data.emoji;
+            el.style.left = (20 + Math.random() * 60) + '%';
+            document.body.appendChild(el);
+            setTimeout(() => el.remove(), 2000);
+        });
+
+        function zoomGrid(step) {
+            currentCellSize += step;
+            if (currentCellSize < 20) currentCellSize = 20;
+            if (currentCellSize > 80) currentCellSize = 80;
+            document.documentElement.style.setProperty('--cell-size', currentCellSize + 'px');
+        }
+
+        function updateProgress() {
+            if (!crosswordData || !crosswordData.words) return;
+            const total = crosswordData.words.length;
+            if (total === 0) return;
+            const correct = crosswordData.words.filter(w => localWordsState[w.id] && localWordsState[w.id].status === 'correct').length;
+            const percent = Math.round((correct / total) * 100);
+            document.getElementById('progress-bar').style.width = percent + '%';
+            document.getElementById('progress-text').textContent = `Разгадано: ${correct} из ${total} (${percent}%)`;
+        }
+
+        window.joinRoom = function() {
+            const code = document.getElementById('input-code').value.toUpperCase();
+            const name = getPlayerName();
+            if (code.length === 4 && name) {
+                currentPlayerName = name;
+                socket.emit('joinRoom', { roomCode: code, playerName: name });
+            }
+        };
+
+        window.playCustom = function(id) {
+            const name = getPlayerName();
+            if (!name) return;
+            currentPlayerName = name;
+            socket.emit('playCustomCrossword', { id, playerName: name });
+        };
+
+        window.deleteCustom = function(id) {
+            const password = prompt("Введите пароль для удаления (1234):");
+            if (password === "1234") {
+                socket.emit('deleteCustomCrossword', { id: id, password: password });
+            } else if (password !== null) {
+                showToast("Неверный пароль!", "error");
+            }
+        };
+
+        function setEditorMode(mode) {
+            editorMode = mode;
+            document.querySelectorAll('#editor-toolbar button').forEach(btn => { btn.classList.toggle('active', btn.dataset.mode === mode); });
+            if (editorGrid.length > 0) { for (let r = 0; r < editorH; r++) { for (let c = 0; c < editorW; c++) renderCell(r, c); } }
+        }
+
+        window.openConstructor = function() { document.getElementById('screen-home').style.display = 'none'; document.getElementById('screen-constructor').style.display = 'block'; };
+        window.closeConstructor = function() { document.getElementById('screen-constructor').style.display = 'none'; document.getElementById('screen-home').style.display = 'block'; closeContextMenu(); cancelPathSelection(); };
+        document.getElementById('btn-create-custom').onclick = window.openConstructor;
+
+        window.initEditor = function() {
+            const name = document.getElementById('cw-name').value.trim(); editorW = parseInt(document.getElementById('cw-width').value); editorH = parseInt(document.getElementById('cw-height').value);
+            if (!name) return showToast("Введите название!", "error"); if (editorW < 5 || editorH < 5) return showToast("Мин. размер 5x5!", "error");
+            
+            editorGrid = Array.from({ length: editorH }, () => Array.from({ length: editorW }, () => ({ type: 'letter', text: '', arrow: '→', clueText: '', length: 0, cells: [] })));
+            
+            document.getElementById('editor-toolbar').style.display = 'flex'; 
+            document.getElementById('editor-hint').style.display = 'block'; 
+            document.getElementById('editor-container-wrapper').style.display = 'flex'; 
+            document.getElementById('btn-save-cw').style.display = 'block';
+            
+            const container = document.getElementById('editor-container'); 
+            container.innerHTML = ''; 
+            container.style.gridTemplateColumns = `repeat(${editorW}, var(--cell-size))`;
+            
+            for (let r = 0; r < editorH; r++) { 
+                for (let c = 0; c < editorW; c++) {
+                    const div = document.createElement('div'); div.className = 'cell'; div.dataset.r = r; div.dataset.c = c;
+                    div.addEventListener('mousedown', (e) => { 
+                        if (isSelectingPath) { e.preventDefault(); togglePathCell(r, c, div); return; } 
+                        if (e.button === 0) { 
+                            if (editorMode === 'delete') { editorGrid[r][c] = { type: 'letter', text: '', arrow: '→', clueText: '', length: 0, cells: [] }; renderCell(r, c); } 
+                            else if (editorMode === 'question') { openContextMenu(e, r, c); } 
+                        } 
+                    });
+                    div.oncontextmenu = (e) => { e.preventDefault(); if(!isSelectingPath) openContextMenu(e, r, c); };
+                    container.appendChild(div); renderCell(r, c);
+                } 
+            }
+        };
+
+        function renderCell(r, c) {
+            const div = document.querySelector(`.cell[data-r="${r}"][data-c="${c}"]`); if (!div) return; const cell = editorGrid[r][c]; div.className = 'cell'; div.innerHTML = ''; 
+            const input = document.createElement('input'); input.type = 'text'; input.oncontextmenu = (e) => { e.preventDefault(); if(!isSelectingPath) openContextMenu(e, r, c); };
+            if (cell.type === 'clue') {
+                div.classList.add('clue-cell'); input.value = cell.clueText; input.readOnly = (editorMode !== 'letter');
+                if (editorMode === 'letter') input.addEventListener('input', (e) => { editorGrid[r][c].clueText = e.target.value; });
+                const arrowSpan = document.createElement('span'); arrowSpan.className = 'arrow'; arrowSpan.textContent = cell.arrow; div.appendChild(arrowSpan);
+            } else {
+                input.maxLength = 1; input.value = cell.text || ''; input.readOnly = (editorMode !== 'letter');
+                input.addEventListener('input', (e) => { 
+                    let val = e.target.value.toUpperCase().replace(/[^А-ЯЁ]/g, ''); e.target.value = val.slice(-1); editorGrid[r][c].text = e.target.value; 
+                    if (e.target.value) {
+                        if (editorDirection === 'down') moveEditorFocus(r, c, 1, 0);
+                        else if (editorDirection === 'up') moveEditorFocus(r, c, -1, 0);
+                        else if (editorDirection === 'left') moveEditorFocus(r, c, 0, -1);
+                        else moveEditorFocus(r, c, 0, 1);
+                    } 
+                });
+            }
+            input.addEventListener('keydown', (e) => handleEditorKeyDown(e, r, c)); div.appendChild(input);
+        }
+
+        function handleEditorKeyDown(e, r, c) {
+            if (e.key === 'ArrowDown') { editorDirection = 'down'; moveEditorFocus(r, c, 1, 0); e.preventDefault(); return; }
+            if (e.key === 'ArrowUp') { editorDirection = 'up'; moveEditorFocus(r, c, -1, 0); e.preventDefault(); return; }
+            if (e.key === 'ArrowRight') { editorDirection = 'right'; moveEditorFocus(r, c, 0, 1); e.preventDefault(); return; }
+            if (e.key === 'ArrowLeft') { editorDirection = 'left'; moveEditorFocus(r, c, 0, -1); e.preventDefault(); return; }
+            if (e.key === 'Enter') { editorDirection = 'down'; moveEditorFocus(r, c, 1, 0); e.preventDefault(); return; }
+            if (e.key === 'Backspace' && e.target.value === '') { 
+                if (editorDirection === 'down') moveEditorFocus(r, c, -1, 0);
+                else if (editorDirection === 'up') moveEditorFocus(r, c, 1, 0);
+                else if (editorDirection === 'left') moveEditorFocus(r, c, 0, 1);
+                else moveEditorFocus(r, c, 0, -1);
+                e.preventDefault(); 
+            }
+        }
+
+        function moveEditorFocus(r, c, dr, dc) {
+            const nr = r + dr, nc = c + dc;
+            if (nr >= 0 && nr < editorH && nc >= 0 && nc < editorW) {
+                const nextInput = document.querySelector(`.cell[data-r="${nr}"][data-c="${nc}"] input`);
+                if (nextInput && !nextInput.readOnly) nextInput.focus();
+            }
+        }
+
+        window.startPathSelection = function() {
+            if (!currentCtxCell) return; pendingClue = { r: currentCtxCell.r, c: currentCtxCell.c, clueText: document.getElementById('ctx-clue-text').value.trim(), arrow: document.getElementById('ctx-arrow').value }; isSelectingPath = true;
+            const existingCell = editorGrid[pendingClue.r][pendingClue.c]; pathCells = (existingCell && existingCell.cells) ? [...existingCell.cells] : [];
+            closeContextMenu(); document.getElementById('path-banner').style.display = 'block'; document.getElementById('editor-container').classList.add('selecting-mode');
+            document.querySelectorAll('.cell').forEach(cDiv => { cDiv.style.border = '1px solid #333'; if (pathCells.some(p => p.r === parseInt(cDiv.dataset.r) && p.c === parseInt(cDiv.dataset.c))) cDiv.style.border = '3px solid #ff9800'; });
+        };
+        function togglePathCell(r, c, div) { const idx = pathCells.findIndex(p => p.r === r && p.c === c); if (idx === -1) { pathCells.push({ r, c }); div.style.border = '3px solid #ff9800'; } else { pathCells.splice(idx, 1); div.style.border = '1px solid #333'; } }
+        window.finishPathSelection = function() { if (pathCells.length === 0) return showToast("Выберите клетки!", "error"); pathCells.sort((a, b) => a.r === b.r ? a.c - b.c : a.r - b.r); editorGrid[pendingClue.r][pendingClue.c] = { type: 'clue', clueText: pendingClue.clueText, arrow: pendingClue.arrow, cells: pathCells, length: pathCells.length, text: '' }; renderCell(pendingClue.r, pendingClue.c); cancelPathSelection(); };
+        window.cancelPathSelection = function() { isSelectingPath = false; pathCells = []; pendingClue = null; document.getElementById('path-banner').style.display = 'none'; document.getElementById('editor-container').classList.remove('selecting-mode'); document.querySelectorAll('.cell').forEach(c => c.style.border = ''); };
+        document.addEventListener('keydown', (e) => { if (e.key === 'Enter' && isSelectingPath) finishPathSelection(); });
+        
+        function openContextMenu(e, r, c) {
+            currentCtxCell = { r, c }; const cellData = editorGrid[r][c];
+            document.getElementById('ctx-clue-text').value = cellData.type === 'clue' ? cellData.clueText : ''; document.getElementById('ctx-arrow').value = cellData.arrow || '→'; document.getElementById('ctx-length').value = cellData.length || 5;
+            updateMenuUI(cellData.arrow || '→', cellData.cells); const menu = document.getElementById('cell-context-menu'); menu.style.display = 'flex'; menu.style.left = Math.min(e.pageX, window.innerWidth - 280) + 'px'; menu.style.top = Math.min(e.pageY, window.innerHeight - 300) + 'px';
+        }
+        function updateMenuUI(arrow, currentCells) { const isOrthogonal = ['→', '↓', '←', '↑'].includes(arrow); document.getElementById('ctx-length').style.display = isOrthogonal ? 'block' : 'none'; document.getElementById('btn-manual-path').style.display = isOrthogonal ? 'none' : 'block'; if (!isOrthogonal) document.getElementById('btn-manual-path').textContent = (currentCells && currentCells.length > 0) ? 'Изменить клетки' : 'Указать клетки'; }
+        document.getElementById('ctx-arrow').onchange = (e) => updateMenuUI(e.target.value, null);
+        window.closeContextMenu = function() { document.getElementById('cell-context-menu').style.display = 'none'; };
+        window.applyContextClue = function() {
+            if (!currentCtxCell) return; const { r, c } = currentCtxCell; const text = document.getElementById('ctx-clue-text').value.trim(); const arrow = document.getElementById('ctx-arrow').value; const length = parseInt(document.getElementById('ctx-length').value);
+            const existingCell = editorGrid[r][c]; let cells = [];
+            if (['→', '↓', '←', '↑'].includes(arrow)) { let dx = 0, dy = 0; if (arrow === '→') dx = 1; if (arrow === '↓') dy = 1; if (arrow === '←') dx = -1; if (arrow === '↑') dy = -1; let sr = r + dy, sc = c + dx; for (let i = 0; i < length; i++) { if (sr >= 0 && sr < editorH && sc >= 0 && sc < editorW) cells.push({ r: sr, c: sc }); sr += dy; sc += dx; } }
+            else { cells = (existingCell && existingCell.arrow === arrow && existingCell.cells) ? existingCell.cells : []; }
+            let finalLength = ['→', '↓', '←', '↑'].includes(arrow) ? length : cells.length; editorGrid[r][c] = { type: 'clue', clueText: text, arrow: arrow, length: finalLength, cells: cells, text: '' };
+            renderCell(r, c); closeContextMenu(); if (editorMode !== 'question') setEditorMode('letter');
+        };
+        window.clearContextCell = function() { if (!currentCtxCell) return; const { r, c } = currentCtxCell; editorGrid[r][c] = { type: 'letter', text: '', arrow: '→', clueText: '', length: 0, cells: [] }; renderCell(r, c); closeContextMenu(); };
+        document.addEventListener('click', (e) => { if (!e.target.closest('#cell-context-menu') && e.button !== 2 && !isSelectingPath) closeContextMenu(); });
+        
+        window.saveCrossword = function() {
+            const name = document.getElementById('cw-name').value.trim(); let words = [], emptyWordsCount = 0;
+            for (let r = 0; r < editorH; r++) { for (let c = 0; c < editorW; c++) { let cell = editorGrid[r][c]; if (cell.type === 'clue') { let wordText = ""; for (let p of cell.cells) wordText += (editorGrid[p.r][p.c].text || ''); let cleanAnswer = wordText.replace(/\s+/g, '').toUpperCase(); if (cleanAnswer.length === 0) emptyWordsCount++; words.push({ id: "cw" + words.length, clueRow: r, clueCol: c, answer: cleanAnswer, clue: cell.clueText || "Вопрос", arrow: cell.arrow, cells: cell.cells }); } } }
+            if (words.length === 0) return showToast("Не найдено ни одного вопроса!", "error");
+            if (emptyWordsCount > 0) { if (!confirm(`Внимание! У ${emptyWordsCount} слов(а) не вписаны ответы. Продолжить?`)) return; }
+            let finalGrid = editorGrid.map(row => row.map(cell => cell.type === 'clue' ? 2 : 1)); socket.emit('saveCustomCrossword', { name, grid: finalGrid, words });
+        };
+
+        socket.on('gameStarted', (data) => {
+            currentRoomCode = data.roomCode; crosswordData = data.crossword; localWordsState = data.currentState || {}; gameWon = false;
+            currentWord = null; currentDirection = 'across';
+            document.getElementById('chat-messages').innerHTML = '';
+            if (data.chatHistory) data.chatHistory.forEach(msg => addChatMessage(msg, false));
+            if (data.players) document.getElementById('players-list').textContent = data.players.map(p => p.name).join(', ');
+            document.querySelectorAll('.screen').forEach(s => s.style.display = 'none');
+            document.getElementById('screen-game').style.display = 'block';
+            document.getElementById('win-modal').style.display = 'none';
+            document.getElementById('room-code').textContent = currentRoomCode;
+            document.getElementById('share-link').value = window.location.origin + window.location.pathname + "?room=" + currentRoomCode;
+            drawCrossword(crosswordData); refreshAllUI(); updateProgress();
+        });
+
+        socket.on('wordUpdated', (data) => { localWordsState[data.wordId] = data.state; updateWordUI(data.wordId); updateProgress(); });
+
+        function drawCrossword(crossword) {
+            const container = document.getElementById('crossword-container');
+            container.innerHTML = ''; container.style.gridTemplateColumns = `repeat(${crossword.grid[0].length}, var(--cell-size))`;
+            for (let r = 0; r < crossword.grid.length; r++) {
+                for (let c = 0; c < crossword.grid[0].length; c++) {
+                    const div = document.createElement('div'); div.className = 'cell';
+                    const cellValue = crossword.grid[r][c];
+                    if (cellValue === 0) { div.classList.add('empty'); } 
+                    else if (cellValue === 2) {
+                        div.classList.add('clue-cell');
+                        const word = crosswordData.words.find(w => w.clueRow === r && w.clueCol === c);
+                        if (word) {
+                            div.innerHTML = `<span style="font-size:calc(var(--cell-size) * 0.2);">${word.clue}</span><span class="arrow">${word.arrow}</span>`;
+                            div.onclick = () => { const firstCell = word.cells[0]; const input = document.querySelector(`input[data-row="${firstCell.r}"][data-col="${firstCell.c}"]`); if (input && !input.disabled) input.focus(); };
+                        }
+                    } else {
+                        const input = document.createElement('input'); input.type = 'text'; input.autocomplete = 'off'; input.dataset.row = r; input.dataset.col = c;
+                        input.addEventListener('focus', (e) => {
+                            document.querySelectorAll('.cell').forEach(el => el.classList.remove('active', 'highlighted')); e.target.parentElement.classList.add('active');
+                            const words = getWordsForCell(r, c);
+                            if (words.length > 0) {
+                                if (currentWord && currentWord.cells.some(cell => cell.r === r && cell.c === c)) {
+                                    if (words.length === 2) { const otherWord = words.find(w => w !== currentWord); if (otherWord) currentWord = otherWord; }
+                                } else { currentWord = words.find(w => w.direction === currentDirection) || words[0]; }
+                                currentDirection = currentWord.direction;
+                                for (let cell of currentWord.cells) { const hInput = document.querySelector(`input[data-row="${cell.r}"][data-col="${cell.c}"]`); if (hInput) hInput.parentElement.classList.add('highlighted'); }
+                            }
+                            setTimeout(() => { e.target.scrollIntoView({ block: 'center', behavior: 'smooth' }); }, 300);
+                        });
+                        input.addEventListener('blur', () => { setTimeout(() => { if (document.activeElement.tagName !== 'INPUT') document.querySelectorAll('.cell').forEach(el => el.classList.remove('highlighted')); }, 100); });
+                        input.addEventListener('input', handleInput); input.addEventListener('keydown', handleKeyDown); div.appendChild(input);
+                    }
+                    container.appendChild(div);
+                }
+            }
+        }
+
+        function handleKeyDown(e) {
+            const r = parseInt(e.target.dataset.row), c = parseInt(e.target.dataset.col);
+            if (e.key === 'ArrowRight') { currentDirection = 'across'; moveGameFocus(r, c, 0, 1); e.preventDefault(); return; }
+            if (e.key === 'ArrowLeft') { currentDirection = 'across'; moveGameFocus(r, c, 0, -1); e.preventDefault(); return; }
+            if (e.key === 'ArrowDown') { currentDirection = 'down'; moveGameFocus(r, c, 1, 0); e.preventDefault(); return; }
+            if (e.key === 'ArrowUp') { currentDirection = 'down'; moveGameFocus(r, c, -1, 0); e.preventDefault(); return; }
+            if (e.key === 'Backspace') {
+                if (e.target.value === '') { 
+                    if (currentWord) {
+                        const idx = currentWord.cells.findIndex(x => x.r === r && x.c === c);
+                        if (idx > 0) { const prevCell = currentWord.cells[idx - 1]; const prevInput = document.querySelector(`input[data-row="${prevCell.r}"][data-col="${prevCell.c}"]`); if (prevInput && !prevInput.disabled) { prevInput.focus(); prevInput.value = ''; syncWordsWithServer(); } }
+                    }
+                } else { e.target.value = ''; syncWordsWithServer(); }
+                e.preventDefault(); return;
+            }
+        }
+
+        function moveGameFocus(r, c, dr, dc) { const nr = r + dr, nc = c + dc; const nextInput = document.querySelector(`input[data-row="${nr}"][data-col="${nc}"]`); if (nextInput && !nextInput.disabled) nextInput.focus(); }
+        
+        function handleInput(e) {
+            const input = e.target; let val = input.value.toUpperCase().replace(/[^А-ЯЁ]/g, ''); input.value = val.slice(-1); syncWordsWithServer();
+            if (input.value && currentWord) {
+                const r = parseInt(input.dataset.row), c = parseInt(input.dataset.col); const idx = currentWord.cells.findIndex(x => x.r === r && x.c === c);
+                if (idx !== -1 && idx + 1 < currentWord.cells.length) { const nextCell = currentWord.cells[idx + 1]; const nextInput = document.querySelector(`input[data-row="${nextCell.r}"][data-col="${nextCell.c}"]`); if (nextInput && !nextInput.disabled) nextInput.focus(); }
+            }
+        }
+
+        function getWordsForCell(r, c) { return crosswordData.words.filter(w => w.cells.some(cell => cell.r === r && cell.c === c)); }
+
+        function syncWordsWithServer() {
+            if (!crosswordData) return;
+            crosswordData.words.forEach(word => {
+                if (localWordsState[word.id] && localWordsState[word.id].status === 'correct') return;
+                let currentText = ""; for (let cell of word.cells) { const input = document.querySelector(`input[data-row="${cell.r}"][data-col="${cell.c}"]`); currentText += (input && input.value) ? input.value : " "; }
+                socket.emit('wordInput', { roomCode: currentRoomCode, wordId: word.id, inputText: currentText, isCompleted: !currentText.includes(" ") });
+            });
+        }
+
+        function refreshAllUI() {
+            for (let r = 0; r < crosswordData.grid.length; r++) { for (let c = 0; c < crosswordData.grid[0].length; c++) { if (crosswordData.grid[r][c] === 1) updateCellUI(r, c); } }
+            checkWinCondition();
+        }
+
+        function updateWordUI(wordId) { const word = crosswordData.words.find(w => w.id === wordId); if (!word) return; for (let cell of word.cells) updateCellUI(cell.r, cell.c); checkWinCondition(); }
+
+        function updateCellUI(r, c) {
+            const input = document.querySelector(`input[data-row="${r}"][data-col="${c}"]`); if (!input) return; const cellDiv = input.parentElement;
+            let isCellCorrect = false, isCellIncorrect = false, finalLetter = "";
+            crosswordData.words.forEach(word => {
+                const letterIndex = word.cells.findIndex(cell => cell.r === r && cell.c === c);
+                if (letterIndex !== -1) {
+                    const state = localWordsState[word.id];
+                    if (state) {
+                        if (state.status === 'correct') { isCellCorrect = true; finalLetter = word.answer[letterIndex] || ""; } 
+                        else if (state.status === 'incorrect') { isCellIncorrect = true; } 
+                        else if (state.status === 'typing') { if (document.activeElement !== input && state.text[letterIndex] && state.text[letterIndex] !== ' ') finalLetter = state.text[letterIndex]; }
+                    }
+                }
+            });
+            cellDiv.classList.remove('correct', 'incorrect');
+            if (isCellCorrect) { cellDiv.classList.add('correct'); input.disabled = true; input.value = finalLetter; } 
+            else if (isCellIncorrect) { cellDiv.classList.add('incorrect'); input.disabled = false; if (document.activeElement !== input && finalLetter) input.value = finalLetter; } 
+            else { input.disabled = false; if (document.activeElement !== input) input.value = finalLetter; }
+        }
+
+        function checkWinCondition() {
+            if (gameWon || !crosswordData) return;
+            if (crosswordData.words.length === 0) return; 
+            const allCorrect = crosswordData.words.every(word => localWordsState[word.id] && localWordsState[word.id].status === 'correct');
+            if (allCorrect) { gameWon = true; document.getElementById('win-modal').style.display = 'flex'; showToast("Сканворд разгадан! Ура!", "success"); }
+        }
+    </script>
+</body>
+</html>
