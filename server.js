@@ -2,190 +2,193 @@ const express = require('express');
 const http = require('http');
 const { Server } = require("socket.io");
 const path = require('path');
-const fs = require('fs');
+const { createClient } = require('@supabase/supabase-js');
 
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server, {
-  cors: {
-    origin: "*", // На время тестов можно так. Позже можно заменить на ваш URL с Render
-    methods: ["GET", "POST"]
-  }
+    cors: {
+        origin: "*", // Разрешаем подключения с любого устройства
+        methods: ["GET", "POST"]
+    }
 });
+
 app.use(express.static(path.join(__dirname)));
 
 const rooms = new Map();
-const DB_FILE = path.join(__dirname, 'crosswords.json');
 
-let savedCrosswords = [];
-if (fs.existsSync(DB_FILE)) {
-    try {
-        savedCrosswords = JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
-    } catch (e) {
-        console.error("Ошибка чтения файла сканвордов:", e);
-    }
+// Настройка подключения к Supabase (ключи берутся из переменных окружения Render)
+const supabaseUrl = process.env.SUPABASE_URL;
+const supabaseKey = process.env.SUPABASE_ANON_KEY;
+const supabase = createClient(supabaseUrl, supabaseKey);
+
+// Функция для генерации кода комнаты
+function generateRoomCode() {
+    const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+    let code = '';
+    for (let i = 0; i < 4; i++) code += chars.charAt(Math.floor(Math.random() * chars.length));
+    return code;
 }
 
-function saveToDB() {
-    fs.writeFileSync(DB_FILE, JSON.stringify(savedCrosswords, null, 2), 'utf8');
-}
+io.on('connection', async (socket) => {
+    console.log('Новое подключение:', socket.id);
 
-io.on('connection', (socket) => {
-    socket.emit('crosswordList', savedCrosswords);
+    // При подключении сразу отправляем список сканвордов из базы
+    const { data: initialList, error: listError } = await supabase.from('crosswords').select('*');
+    if (!listError) socket.emit('crosswordList', initialList || []);
 
-    socket.on('createRoom', (data) => {
-        const playerName = data.playerName || 'Хост';
-        const roomCode = Math.random().toString(36).substring(2, 6).toUpperCase();
+    // Сохранение нового сканворда
+    socket.on('saveCustomCrossword', async (data) => {
+        const id = "cw_" + Date.now();
+        const { error } = await supabase.from('crosswords').insert([{
+            id: id,
+            name: data.name,
+            grid: data.grid,
+            words: data.words
+        }]);
+
+        if (error) {
+            console.error("Ошибка БД при сохранении:", error);
+            socket.emit('errorMsg', 'Ошибка сохранения в базу данных');
+        } else {
+            socket.emit('crosswordSaved', 'Сканворд сохранен в облако!');
+            const { data: updatedList } = await supabase.from('crosswords').select('*');
+            io.emit('crosswordList', updatedList || []); // Обновляем список у всех
+        }
+    });
+
+    // Удаление сканворда
+    socket.on('deleteCustomCrossword', async (data) => {
+        if (data.password === "1234") {
+            const { error } = await supabase.from('crosswords').delete().eq('id', data.id);
+            if (!error) {
+                socket.emit('infoMsg', 'Сканворд удален');
+                const { data: updatedList } = await supabase.from('crosswords').select('*');
+                io.emit('crosswordList', updatedList || []);
+            } else {
+                socket.emit('errorMsg', 'Ошибка при удалении');
+            }
+        } else {
+            socket.emit('errorMsg', 'Неверный пароль!');
+        }
+    });
+
+    // Запуск игры (создание комнаты)
+    socket.on('playCustomCrossword', async (data) => {
+        const { data: cw, error } = await supabase.from('crosswords').select('*').eq('id', data.id).single();
         
-        rooms.set(roomCode, { 
-            crossword: data.crossword, 
-            players: [{ id: socket.id, name: playerName }], 
-            wordsState: {},
+        if (error || !cw) {
+            socket.emit('errorMsg', 'Сканворд не найден в базе');
+            return;
+        }
+
+        const roomCode = generateRoomCode();
+        rooms.set(roomCode, {
+            crossword: cw,
+            players: [{ id: socket.id, name: data.playerName }],
+            currentState: {},
             chatHistory: []
         });
-        
+
         socket.join(roomCode);
-        
-        io.to(roomCode).emit('gameStarted', { 
-            roomCode: roomCode, 
-            crossword: data.crossword, 
+        socket.emit('gameStarted', {
+            roomCode: roomCode,
+            crossword: cw,
             currentState: {},
-            players: rooms.get(roomCode).players,
-            chatHistory: []
+            chatHistory: [],
+            players: rooms.get(roomCode).players
         });
     });
 
+    // Подключение к существующей комнате
     socket.on('joinRoom', (data) => {
         const { roomCode, playerName } = data;
         const room = rooms.get(roomCode);
         
         if (!room) {
-            return socket.emit('toastMsg', { text: 'Комната не найдена.', type: 'error' });
+            socket.emit('errorMsg', 'Комната не найдена или уже закрыта');
+            return;
         }
         
-        if (!room.players.some(p => p.id === socket.id)) {
-            room.players.push({ id: socket.id, name: playerName || 'Гость' });
-        }
-        
+        room.players.push({ id: socket.id, name: playerName });
         socket.join(roomCode);
         
-        socket.emit('gameStarted', { 
-            roomCode: roomCode, 
-            crossword: room.crossword, 
-            currentState: room.wordsState,
-            players: room.players,
-            chatHistory: room.chatHistory
-        });
-
         io.to(roomCode).emit('playersUpdated', room.players);
+        socket.emit('gameStarted', {
+            roomCode: roomCode,
+            crossword: room.crossword,
+            currentState: room.currentState,
+            chatHistory: room.chatHistory,
+            players: room.players
+        });
     });
 
+    // Ввод букв (синхронизация)
+    socket.on('wordInput', (data) => {
+        const { roomCode, wordId, inputText, isCompleted } = data;
+        const room = rooms.get(roomCode);
+        if (!room) return;
+
+        const crosswordWord = room.crossword.words.find(w => w.id === wordId);
+        if (!crosswordWord) return;
+
+        const correctAnswer = crosswordWord.answer.toUpperCase();
+        let status = 'typing';
+        
+        if (isCompleted) {
+            status = (inputText === correctAnswer) ? 'correct' : 'incorrect';
+        }
+
+        room.currentState[wordId] = { text: inputText, status: status };
+        io.to(roomCode).emit('wordUpdated', { wordId, state: room.currentState[wordId] });
+    });
+
+    // Чат
+    socket.on('sendChatMessage', (msg) => {
+        const room = rooms.get(msg.roomCode);
+        if (room) {
+            room.chatHistory.push(msg);
+            socket.to(msg.roomCode).emit('receiveChatMessage', msg);
+        }
+    });
+
+    // Эмодзи
+    socket.on('sendEmoji', (data) => {
+        socket.to(data.roomCode).emit('receiveEmoji', data);
+    });
+
+    // Выход из комнаты
     socket.on('leaveRoom', (roomCode) => {
         const room = rooms.get(roomCode);
         if (room) {
             room.players = room.players.filter(p => p.id !== socket.id);
             socket.leave(roomCode);
-            
             if (room.players.length === 0) {
-                rooms.delete(roomCode);
+                rooms.delete(roomCode); // Удаляем пустую комнату
             } else {
                 io.to(roomCode).emit('playersUpdated', room.players);
             }
         }
     });
 
-    socket.on('sendChatMessage', (data) => {
-        const { roomCode, sender, text } = data;
-        const room = rooms.get(roomCode);
-        
-        if (room && text.trim()) {
-            const msg = { sender, text, time: Date.now() };
-            room.chatHistory.push(msg);
-            io.to(roomCode).emit('receiveChatMessage', msg);
-        }
-    });
-
-    socket.on('wordInput', (data) => {
-        const { roomCode, wordId, inputText, isCompleted } = data;
-        const room = rooms.get(roomCode);
-        
-        if (!room) return;
-        if (room.wordsState[wordId] && room.wordsState[wordId].status === 'correct') return;
-
-        if (isCompleted) {
-            const wordObj = room.crossword.words.find(w => w.id === wordId);
-            const isCorrect = wordObj && (wordObj.answer === inputText.toUpperCase());
-            room.wordsState[wordId] = { text: inputText, status: isCorrect ? 'correct' : 'incorrect' };
-        } else {
-            room.wordsState[wordId] = { text: inputText, status: 'typing' };
-        }
-        
-        io.to(roomCode).emit('wordUpdated', { wordId, state: room.wordsState[wordId] });
-    });
-
-    socket.on('sendEmoji', (data) => {
-        io.to(data.roomCode).emit('receiveEmoji', { emoji: data.emoji });
-    });
-
-    socket.on('saveCustomCrossword', (crosswordData) => {
-        try {
-            crosswordData.id = 'cw_' + Date.now();
-            savedCrosswords.push(crosswordData);
-            saveToDB();
-            io.emit('crosswordList', savedCrosswords);
-            socket.emit('toastMsg', { text: 'Сканворд сохранен!', type: 'success' });
-        } catch (error) {
-            socket.emit('toastMsg', { text: 'Ошибка сохранения', type: 'error' });
-        }
-    });
-
-    socket.on('deleteCustomCrossword', (data) => {
-        if (data.password !== '1234') {
-            return socket.emit('toastMsg', { text: 'Неверный пароль!', type: 'error' });
-        }
-        
-        const index = savedCrosswords.findIndex(c => c.id === data.id);
-        if (index !== -1) {
-            savedCrosswords.splice(index, 1);
-            saveToDB();
-            io.emit('crosswordList', savedCrosswords);
-            socket.emit('toastMsg', { text: 'Сканворд удален.', type: 'success' });
-        }
-    });
-
-    // ИСПРАВЛЕННЫЙ ОБРАБОТЧИК ЗАПУСКА ИГРЫ
-    socket.on('playCustomCrossword', (data) => {
-        const { id, playerName } = data;
-        const crossword = savedCrosswords.find(c => c.id === id);
-        
-        if (!crossword) {
-            return socket.emit('toastMsg', { text: 'Сканворд не найден.', type: 'error' });
-        }
-
-        const roomCode = Math.random().toString(36).substring(2, 6).toUpperCase();
-        
-        rooms.set(roomCode, { 
-            crossword: { grid: crossword.grid, words: crossword.words }, 
-            players: [{ id: socket.id, name: playerName || 'Хост' }], 
-            wordsState: {},
-            chatHistory: []
-        });
-        
-        socket.join(roomCode);
-        
-        socket.emit('gameStarted', { 
-            roomCode: roomCode, 
-            crossword: { grid: crossword.grid, words: crossword.words }, 
-            currentState: {},
-            players: rooms.get(roomCode).players,
-            chatHistory: []
+    // Отключение (закрытие вкладки)
+    socket.on('disconnect', () => {
+        rooms.forEach((room, code) => {
+            const playerExists = room.players.find(p => p.id === socket.id);
+            if (playerExists) {
+                room.players = room.players.filter(p => p.id !== socket.id);
+                if (room.players.length === 0) {
+                    rooms.delete(code);
+                } else {
+                    io.to(code).emit('playersUpdated', room.players);
+                }
+            }
         });
     });
 });
 
-// server.js (в самом низу)
-
-const PORT = process.env.PORT || 3000; // Render передаст порт через переменную окружения
-server.listen(PORT, '0.0.0.0', () => { // Слушаем на всех интерфейсах
+// Запуск сервера (важно для Render!)
+const PORT = process.env.PORT || 3000;
+server.listen(PORT, '0.0.0.0', () => {
     console.log(`Server started on port ${PORT}`);
 });
